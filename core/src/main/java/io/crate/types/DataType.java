@@ -97,12 +97,10 @@ public abstract class DataType<T> implements Comparable, Streamable {
     }
 
     @Override
-    public void readFrom(StreamInput in) throws IOException {
-    }
+    public void readFrom(StreamInput in) throws IOException {}
 
     @Override
-    public void writeTo(StreamOutput out) throws IOException {
-    }
+    public void writeTo(StreamOutput out) throws IOException {}
 
     @Override
     public String toString() {
