@@ -27,6 +27,10 @@ Breaking Changes
 Changes
 =======
 
+ - Support single column subselects within the `IN` operator, e.g.::
+
+    select * from t1 where id IN (select id from t2)
+
  - Improved resiliency of drop, close and open table operations
 
   - Introduce support for single column subselects in ANY, e.g.::

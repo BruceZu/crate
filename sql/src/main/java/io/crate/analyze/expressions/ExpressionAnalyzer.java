@@ -483,39 +483,61 @@ public class ExpressionAnalyzer {
             /*
              * convert where x IN (values)
              *
-             * where values = a list of expressions
+             * where values = a list of expressions or a subquery
              *
              * into
              *
              *      x = ANY(array(1, 2, 3, ...))
+             * or
+             *      x = ANY(select x from t)
              */
             Symbol left = ensureSingleValue(process(node.getValue(), context));
             DataType targetType = left.valueType();
 
             Expression valueList = node.getValueList();
-            if (!(valueList instanceof InListExpression)) {
+            if (valueList instanceof InListExpression) {
+                List<Expression> expressions = ((InListExpression) valueList).getValues();
+                List<Symbol> symbols = new ArrayList<>(expressions.size());
+
+                for (Expression expression : expressions) {
+                    Symbol symbol = process(expression, context);
+                    if (targetType == DataTypes.UNDEFINED) {
+                        targetType = symbol.valueType();
+                        left = castIfNeededOrFail(left, targetType);
+
+                        symbols.add(symbol);
+                    } else {
+                        symbols.add(castIfNeededOrFail(symbol, targetType));
+                    }
+                }
+                FunctionInfo functionInfo = ArrayFunction.createInfo(Symbols.typeView(symbols));
+                return context.allocateFunction(
+                    getBuiltinFunctionInfo(AnyEqOperator.NAME, Arrays.asList(targetType, functionInfo.returnType())),
+                    Arrays.asList(left, context.allocateFunction(functionInfo, symbols))
+                );
+            } else if (valueList instanceof SubqueryExpression) {
+                // IN argument is a subquery
+                SubqueryExpression subqueryExpression = (SubqueryExpression) valueList;
+                Symbol subquerySymbol = process(subqueryExpression, context);
+
+                DataType rightInnerType = ((CollectionType) subquerySymbol.valueType()).innerType();
+                // The side which has a column instead of functions/literals dictates the type.
+
+                // x IN (null)                                  -> must not result in to-null casts
+                // int_col IN (select col1 from unnest([1,2]))  -> must cast to int instead of long (otherwise lucene query would be slow)
+                // null IN (select col1 from unnest([1, 2]))    -> must not cast to null
+                if (SymbolVisitors.any(symbol -> symbol instanceof Field, left) || rightInnerType == DataTypes.UNDEFINED) {
+                    subquerySymbol = castIfNeededOrFail(subquerySymbol, new ArrayType(left.valueType()));
+                } else {
+                    left = castIfNeededOrFail(left, rightInnerType);
+                }
+                return context.allocateFunction(
+                    getBuiltinFunctionInfo(AnyEqOperator.NAME, Arrays.asList(left.valueType(), subquerySymbol.valueType())),
+                    Arrays.asList(left, subquerySymbol));
+            } else {
                 throw new UnsupportedOperationException(String.format(Locale.ENGLISH,
                     "Expression %s is not supported in IN", ExpressionFormatter.formatExpression(valueList)));
             }
-            List<Expression> expressions = ((InListExpression) valueList).getValues();
-            List<Symbol> symbols = new ArrayList<>(expressions.size());
-
-            for (Expression expression : expressions) {
-                Symbol symbol = ensureSingleValue(process(expression, context));
-                if (targetType == DataTypes.UNDEFINED) {
-                    targetType = symbol.valueType();
-                    left = castIfNeededOrFail(left, targetType);
-
-                    symbols.add(symbol);
-                } else {
-                    symbols.add(castIfNeededOrFail(symbol, targetType));
-                }
-            }
-            FunctionInfo functionInfo = ArrayFunction.createInfo(Symbols.typeView(symbols));
-            return context.allocateFunction(
-                getBuiltinFunctionInfo(AnyEqOperator.NAME, Arrays.asList(targetType, functionInfo.returnType())),
-                Arrays.asList(left, context.allocateFunction(functionInfo, symbols))
-            );
         }
 
         @Override
